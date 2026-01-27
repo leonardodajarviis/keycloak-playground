@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    
+    <!-- Package Information -->
+    <PackageId>Keycloak.Netx</PackageId>
+    <Version>1.0.0-alpha.1</Version>
+    <Authors>Jarviis Ha</Authors>
+    <Description>A lightweight .NET 8 library for integrating Keycloak authentication into ASP.NET Core applications with JWT Bearer token validation and optional token introspection.</Description>
+    <PackageProjectUrl>https://github.com/jarviisha/Keycloak.Net</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/jarviisha/Keycloak.Net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>keycloak;authentication;jwt;aspnetcore;oauth2;oidc;security;bearer-token;introspection;dotnet</PackageTags>
+    <PackageReleaseNotes>Initial alpha release of Keycloak.Net - A lightweight Keycloak authentication library with JWT validation and token introspection support.</PackageReleaseNotes>
+    <Copyright>Copyright © Jarviis Ha 2026</Copyright>
+    
+    <!-- Package Options -->
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    
+    <!-- Assembly Information -->
+    <AssemblyTitle>Keycloak.Net</AssemblyTitle>
+    <AssemblyDescription>A lightweight .NET 8 library for integrating Keycloak authentication into ASP.NET Core applications</AssemblyDescription>
+    <AssemblyProduct>Keycloak.Net</AssemblyProduct>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\"/>
+    <None Include="..\..\LICENSE" Pack="true" PackagePath="\"/>
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.7" />
+  </ItemGroup>
+
+</Project>
