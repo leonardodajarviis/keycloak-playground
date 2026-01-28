@@ -12,9 +12,12 @@
   - [C. Endpoint Refresh Token](#c-endpoint-refresh-token)
   - [D. Endpoint Public Keys](#d-endpoint-public-keys-để-verify-jwt)
   - [E. Endpoint Logout](#e-endpoint-logout)
+  - [F. Endpoint Đăng ký Tài khoản](#f-endpoint-đăng-ký-tài-khoản)
+  - [G. Gán Roles cho User](#g-gán-roles-cho-user-admin-api)
 - [4. QUY TRÌNH XỬ LÝ TẠI BACKEND](#4-quy-trình-xử-lý-tại-backend)
   - [Bước 1: Tiếp nhận và Chuyển tiếp (Login)](#bước-1-tiếp-nhận-và-chuyển-tiếp-login)
   - [Bước 2: Xác thực các Request tiếp theo](#bước-2-xác-thực-các-request-tiếp-theo)
+  - [Bước 3: Trích xuất Roles và Claims từ JWT Token](#bước-3-trích-xuất-roles-và-claims-từ-jwt-token)
 - [5. CẤU HÌNH BIẾN MÔI TRƯỜNG (.env)](#5-cấu-hình-biến-môi-trường-env)
 - [6. TRIỂN KHAI CODE MẪU (.NET)](#6-triển-khai-code-mẫu-net)
   - [A. Model định nghĩa](#a-model-định-nghĩa)
@@ -22,6 +25,7 @@
   - [C. Controller xử lý API](#c-controller-xử-lý-api)
   - [D. Middleware xác thực JWT](#d-middleware-xác-thực-jwt)
   - [E. Đăng ký Services trong Program.cs](#e-đăng-ký-services-trong-programcs)
+  - [F. Phân quyền với Roles và Claims](#f-phân-quyền-với-roles-và-claims)
 - [7. BẢO MẬT VÀ BEST PRACTICES](#7-bảo-mật-và-best-practices)
   - [A. Lưu trữ Token ở Client](#a-lưu-trữ-token-ở-client)
   - [B. Rate Limiting](#b-rate-limiting)
@@ -153,6 +157,160 @@ Khi người dùng đăng xuất, Backend cần gọi endpoint này để thu h�
 - Client nên xóa tất cả tokens đã lưu (access_token, refresh_token, id_token)
 - Response trả về status 204 No Content nếu thành công
 
+### F. Endpoint Đăng ký Tài khoản
+Backend tạo user mới trong Keycloak thông qua Admin REST API:
+`POST {BASE_URL}/admin/realms/{realm-name}/users`
+
+**Headers:**
+| Header | Giá trị |
+| :--- | :--- |
+| `Authorization` | `Bearer [admin_access_token]` |
+| `Content-Type` | `application/json` |
+
+**Nội dung Request (JSON):**
+```json
+{
+  "username": "newuser",
+  "email": "user@example.com",
+  "firstName": "John",
+  "lastName": "Doe",
+  "enabled": true,
+  "emailVerified": false,
+  "credentials": [
+    {
+      "type": "password",
+      "value": "userPassword123",
+      "temporary": false
+    }
+  ]
+}
+```
+
+**Lưu ý quan trọng:**
+- Endpoint này yêu cầu **Admin Access Token**, không phải user token thông thường
+- Backend cần có service account hoặc admin user để lấy admin token
+- Admin token được lấy qua endpoint token với `grant_type=client_credentials`
+- Để lấy Admin Token:
+  ```
+  POST {BASE_URL}/realms/{realm-name}/protocol/openid-connect/token
+
+  Body (x-www-form-urlencoded):
+  - grant_type: client_credentials
+  - client_id: [admin_client_id]
+  - client_secret: [admin_client_secret]
+  ```
+
+**Cấu hình Client cho Admin API:**
+- Trong Keycloak Admin Console, client cần có:
+  - **Service Accounts Enabled**: ON
+  - **Authorization Enabled**: ON (nếu cần)
+  - **Service Account Roles**: Thêm role `manage-users` từ `realm-management`
+
+**⚠️ Lưu ý Bảo mật quan trọng:**
+- User mới được tạo sẽ **KHÔNG có roles mặc định** (trừ default roles của realm)
+- User **KHÔNG thể tự gán roles** cho chính mình thông qua API đăng ký
+- Chỉ có Admin hoặc Backend với quyền Admin mới có thể gán roles cho users
+- Nếu cần user có role ngay khi đăng ký, Backend phải:
+  1. Tạo user qua Admin API
+  2. Gọi tiếp Admin API để gán role cho user vừa tạo
+  3. Endpoint: `POST {BASE_URL}/admin/realms/{realm}/users/{userId}/role-mappings/realm`
+
+**Tại sao User không thể tự gán Roles?**
+- **Bảo mật**: Nếu user tự gán roles, ai cũng có thể tự phong mình làm admin
+- **Phân quyền tập trung**: Roles phải được quản lý tập trung bởi administrators
+- **Audit trail**: Mọi thay đổi về roles đều phải được theo dõi và kiểm soát
+- **Principle of Least Privilege**: User chỉ được cấp quyền tối thiểu cần thiết
+
+### G. Gán Roles cho User (Admin API)
+
+Sau khi tạo user, Backend có thể gán roles thông qua Admin API:
+
+#### G1. Lấy User ID sau khi tạo
+
+Khi tạo user thành công, Keycloak trả về status `201 Created` với header `Location` chứa URL đến user mới:
+```
+Location: https://auth.example.com/admin/realms/my-realm/users/f8a7b234-5c6d-4e2f-8a9b-1c2d3e4f5g6h
+```
+
+User ID nằm ở cuối URL. Backend cần parse để lấy User ID này.
+
+#### G2. Gán Realm Roles cho User
+
+**Endpoint:**
+```
+POST {BASE_URL}/admin/realms/{realm-name}/users/{userId}/role-mappings/realm
+```
+
+**Headers:**
+```
+Authorization: Bearer [admin_access_token]
+Content-Type: application/json
+```
+
+**Body (JSON):**
+```json
+[
+  {
+    "id": "role-uuid-here",
+    "name": "user"
+  }
+]
+```
+
+**Lưu ý:**
+- Cần cả `id` (UUID) và `name` của role
+- Có thể gán nhiều roles cùng lúc (array)
+- Phải lấy Role ID trước bằng endpoint GET roles
+
+#### G3. Lấy danh sách Roles có sẵn
+
+**Endpoint lấy tất cả Realm Roles:**
+```
+GET {BASE_URL}/admin/realms/{realm-name}/roles
+```
+
+**Response mẫu:**
+```json
+[
+  {
+    "id": "abc123-def456-ghi789",
+    "name": "user",
+    "description": "Standard user role"
+  },
+  {
+    "id": "xyz987-uvw654-rst321",
+    "name": "admin",
+    "description": "Administrator role"
+  }
+]
+```
+
+#### G4. Quy trình đầy đủ để đăng ký User với Role
+
+**Bước 1:** Backend nhận request đăng ký từ Client
+**Bước 2:** Backend lấy Admin Token (client_credentials grant)
+**Bước 3:** Backend tạo user qua Admin API
+**Bước 4:** Parse User ID từ Location header
+**Bước 5:** Backend gán role mặc định cho user (thường là role "user")
+**Bước 6:** Trả về response thành công cho Client
+
+**Quan trọng:**
+- Các bước 2-5 phải thực hiện **phía Backend**
+- Client chỉ gọi `/api/auth/register` với thông tin cơ bản
+- Backend tự động gán role "user" mặc định cho mọi user đăng ký mới
+- Admin roles chỉ được gán thủ công bởi administrators qua Keycloak Admin Console
+
+#### G5. Phân biệt quyền hạn
+
+| Ai? | Có thể làm gì? | Cách thức |
+|-----|----------------|-----------|
+| **User thông thường** | Đăng ký tài khoản | Gọi `/api/auth/register` |
+| **User thông thường** | Đăng nhập, đổi mật khẩu | Các API công khai |
+| **User thông thường** | ❌ KHÔNG thể gán/thay đổi roles | Bị cấm hoàn toàn |
+| **Backend Service** | Tạo user và gán role mặc định | Dùng Admin Token với role `manage-users` |
+| **Backend Service** | ❌ KHÔNG nên gán admin roles | Chỉ gán role "user" cơ bản |
+| **Keycloak Admin** | Quản lý users, gán/thu hồi mọi roles | Keycloak Admin Console hoặc Admin API |
+
 ---
 
 ## 4. QUY TRÌNH XỬ LÝ TẠI BACKEND
@@ -169,6 +327,109 @@ Khi Client gọi các API nghiệp vụ:
 2. Kiểm tra chữ ký Token (Offline) bằng **Public Key** lấy từ endpoint `/certs`.
 3. Kiểm tra tính hợp lệ của Token (`exp`, `iss`, `aud`).
 4. Xử lý nghiệp vụ nếu hợp lệ.
+
+### Bước 3: Trích xuất Roles và Claims từ JWT Token
+
+Sau khi xác thực token thành công, Backend cần trích xuất thông tin user và phân quyền từ JWT token:
+
+#### 3.1. Cấu trúc JWT Token từ Keycloak
+
+JWT Token được chia thành 3 phần (cách nhau bởi dấu chấm):
+```
+Header.Payload.Signature
+```
+
+**Payload chứa Claims** (thông tin user và roles):
+- **sub**: User ID (subject)
+- **preferred_username**: Tên đăng nhập
+- **email**: Email của user
+- **name**: Tên đầy đủ
+- **given_name**: Tên
+- **family_name**: Họ
+- **realm_access**: Chứa Realm Roles
+- **resource_access**: Chứa Client Roles (roles cụ thể cho từng client)
+- **exp**: Thời gian hết hạn (timestamp)
+- **iat**: Thời gian phát hành (timestamp)
+- **iss**: Issuer (Keycloak realm URL)
+
+#### 3.2. Cách Backend lấy Roles và Claims
+
+**Bước 1: Decode JWT Token**
+- JWT là chuỗi Base64URL encoded
+- Phần Payload (phần thứ 2) chứa tất cả claims
+- Backend cần decode Base64URL để lấy JSON payload
+
+**Bước 2: Parse JSON Payload**
+- Chuyển đổi string JSON thành object
+- Truy cập các properties để lấy thông tin
+
+**Bước 3: Trích xuất Realm Roles**
+- Tìm claim có key `realm_access`
+- Bên trong có property `roles` là array chứa danh sách roles
+- Ví dụ: `["admin", "user"]`
+
+**Bước 4: Trích xuất Client Roles (nếu có)**
+- Tìm claim có key `resource_access`
+- Bên trong có object với key là client_id
+- Mỗi client có property `roles` chứa roles riêng
+- Ví dụ: `{ "backend-service": { "roles": ["api-admin"] } }`
+
+**Bước 5: Tạo User Context**
+- Lưu thông tin user và roles vào context của request
+- Sử dụng Claims-based authentication của framework
+- Gắn roles vào Principal/User object để sử dụng trong controllers
+
+#### 3.3. Ví dụ cấu trúc Payload trong JWT
+
+```json
+{
+  "sub": "f8a7b234-5c6d-4e2f-8a9b-1c2d3e4f5g6h",
+  "preferred_username": "john.doe",
+  "email": "john@example.com",
+  "name": "John Doe",
+  "given_name": "John",
+  "family_name": "Doe",
+  "realm_access": {
+    "roles": ["admin", "user", "offline_access"]
+  },
+  "resource_access": {
+    "backend-service": {
+      "roles": ["api-admin", "data-read"]
+    },
+    "account": {
+      "roles": ["manage-account", "view-profile"]
+    }
+  },
+  "exp": 1706543210,
+  "iat": 1706542310,
+  "iss": "https://auth.example.com/realms/my-project"
+}
+```
+
+#### 3.4. Lưu ý quan trọng
+
+**Về Security:**
+- KHÔNG decode token mà không verify signature trước
+- Luôn verify token bằng public key từ Keycloak trước khi tin tưởng claims
+- Claims có thể bị giả mạo nếu không verify signature
+
+**Về Performance:**
+- Cache public keys từ Keycloak (thường 24h)
+- Parse token chỉ 1 lần cho mỗi request
+- Lưu claims vào request context để tái sử dụng
+
+**Về Realm vs Client Roles:**
+- **Realm Roles**: Roles chung cho toàn bộ realm, dùng cho nhiều applications
+- **Client Roles**: Roles riêng cho từng client, giới hạn phạm vi trong 1 application
+- Backend thường dùng Realm Roles cho đơn giản, hoặc Client Roles nếu cần isolation
+
+#### 3.5. Sử dụng Roles để phân quyền
+
+Sau khi có roles, Backend có thể:
+1. **Kiểm tra Role trong Controller**: Trước khi xử lý logic, check xem user có role cần thiết không
+2. **Áp dụng Authorization Policy**: Tạo policies dựa trên roles (ví dụ: AdminOnly policy)
+3. **Filter data**: Giới hạn dữ liệu trả về dựa trên roles (admin thấy tất cả, user chỉ thấy của mình)
+4. **Audit logging**: Log các hành động với thông tin user và role
 
 ---
 
@@ -233,6 +494,66 @@ public class LogoutRequest
     [Required]
     public string RefreshToken { get; set; }
 }
+
+// Models/RegisterRequest.cs
+public class RegisterRequest
+{
+    [Required]
+    [StringLength(50, MinimumLength = 3)]
+    public string Username { get; set; }
+
+    [Required]
+    [EmailAddress]
+    public string Email { get; set; }
+
+    [Required]
+    [StringLength(100, MinimumLength = 8)]
+    public string Password { get; set; }
+
+    [StringLength(50)]
+    public string FirstName { get; set; }
+
+    [StringLength(50)]
+    public string LastName { get; set; }
+}
+
+// Models/KeycloakUserCreateRequest.cs (DTO cho Keycloak Admin API)
+public class KeycloakUserCreateRequest
+{
+    [JsonPropertyName("username")]
+    public string Username { get; set; }
+
+    [JsonPropertyName("email")]
+    public string Email { get; set; }
+
+    [JsonPropertyName("firstName")]
+    public string FirstName { get; set; }
+
+    [JsonPropertyName("lastName")]
+    public string LastName { get; set; }
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    [JsonPropertyName("emailVerified")]
+    public bool EmailVerified { get; set; } = false;
+
+    [JsonPropertyName("credentials")]
+    public List<KeycloakCredential> Credentials { get; set; }
+}
+
+// Models/KeycloakCredential.cs
+public class KeycloakCredential
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "password";
+
+    [JsonPropertyName("value")]
+    public string Value { get; set; }
+
+    [JsonPropertyName("temporary")]
+    public bool Temporary { get; set; } = false;
+}
 ```
 
 ### B. Service xử lý Keycloak
@@ -245,6 +566,8 @@ public interface IKeycloakService
     Task<TokenResponse> RefreshTokenAsync(string refreshToken);
     Task<bool> ValidateTokenAsync(string token);
     Task<bool> LogoutAsync(string refreshToken);
+    Task<bool> RegisterAsync(RegisterRequest request);
+    Task<string> GetAdminTokenAsync();
 }
 
 public class KeycloakService : IKeycloakService
@@ -409,6 +732,109 @@ public class KeycloakService : IKeycloakService
             return false;
         }
     }
+
+    public async Task<string> GetAdminTokenAsync()
+    {
+        var tokenEndpoint = $"{BaseUrl}/realms/{Realm}/protocol/openid-connect/token";
+
+        var requestBody = new Dictionary<string, string>
+        {
+            { "grant_type", "client_credentials" },
+            { "client_id", ClientId },
+            { "client_secret", ClientSecret }
+        };
+
+        try
+        {
+            var response = await _httpClient.PostAsync(
+                tokenEndpoint,
+                new FormUrlEncodedContent(requestBody)
+            );
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Failed to get admin token");
+                return null;
+            }
+
+            var content = await response.Content.ReadAsStringAsync();
+            var tokenResponse = JsonSerializer.Deserialize<TokenResponse>(content);
+            return tokenResponse?.AccessToken;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting admin token");
+            return null;
+        }
+    }
+
+    public async Task<bool> RegisterAsync(RegisterRequest request)
+    {
+        try
+        {
+            // Lấy admin token
+            var adminToken = await GetAdminTokenAsync();
+            if (string.IsNullOrEmpty(adminToken))
+            {
+                _logger.LogError("Cannot obtain admin token for user registration");
+                return false;
+            }
+
+            // Tạo payload cho Keycloak
+            var userCreateRequest = new KeycloakUserCreateRequest
+            {
+                Username = request.Username,
+                Email = request.Email,
+                FirstName = request.FirstName,
+                LastName = request.LastName,
+                Enabled = true,
+                EmailVerified = false,
+                Credentials = new List<KeycloakCredential>
+                {
+                    new KeycloakCredential
+                    {
+                        Type = "password",
+                        Value = request.Password,
+                        Temporary = false
+                    }
+                }
+            };
+
+            // Gọi Admin API
+            var createUserEndpoint = $"{BaseUrl}/admin/realms/{Realm}/users";
+
+            var httpRequest = new HttpRequestMessage(HttpMethod.Post, createUserEndpoint);
+            httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", adminToken);
+            httpRequest.Content = new StringContent(
+                JsonSerializer.Serialize(userCreateRequest),
+                System.Text.Encoding.UTF8,
+                "application/json"
+            );
+
+            var response = await _httpClient.SendAsync(httpRequest);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                _logger.LogWarning("User already exists: {Username}", request.Username);
+                return false;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger.LogError("User creation failed: {Error}", errorContent);
+                return false;
+            }
+
+            _logger.LogInformation("User registered successfully: {Username}", request.Username);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during user registration");
+            return false;
+        }
+    }
 }
 ```
 
@@ -521,6 +947,40 @@ public class AuthController : ControllerBase
             return StatusCode(500, new { message = "Internal server error" });
         }
     }
+
+    [HttpPost("register")]
+    [ProducesResponseType(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> Register([FromBody] RegisterRequest request)
+    {
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+
+        try
+        {
+            var success = await _keycloakService.RegisterAsync(request);
+
+            if (!success)
+            {
+                return Conflict(new { message = "User already exists or registration failed" });
+            }
+
+            return StatusCode(201, new
+            {
+                message = "User registered successfully",
+                username = request.Username
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Registration error");
+            return StatusCode(500, new { message = "Internal server error" });
+        }
+    }
 }
 ```
 
@@ -548,7 +1008,8 @@ public class JwtValidationMiddleware
         // Bỏ qua các endpoint không cần xác thực
         var path = context.Request.Path.Value;
         if (path.Contains("/api/auth/login") ||
-            path.Contains("/api/auth/refresh"))
+            path.Contains("/api/auth/refresh") ||
+            path.Contains("/api/auth/register"))
         {
             await _next(context);
             return;
@@ -618,6 +1079,250 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+```
+
+### F. Phân quyền với Roles và Claims
+
+#### 1. Tạo Attribute để kiểm tra Role
+
+```csharp
+// Attributes/RequireRoleAttribute.cs
+[AttributeUsage(AttributeTargets.Method | AttributeTargets.Class)]
+public class RequireRoleAttribute : Attribute, IAuthorizationFilter
+{
+    private readonly string[] _roles;
+
+    public RequireRoleAttribute(params string[] roles)
+    {
+        _roles = roles;
+    }
+
+    public void OnAuthorization(AuthorizationFilterContext context)
+    {
+        var user = context.HttpContext.User;
+
+        if (user == null || !user.Identity.IsAuthenticated)
+        {
+            context.Result = new UnauthorizedResult();
+            return;
+        }
+
+        // Kiểm tra user có ít nhất một role được yêu cầu
+        var hasRole = _roles.Any(role =>
+            user.Claims.Any(c => c.Type == "realm_access" && c.Value.Contains(role))
+        );
+
+        if (!hasRole)
+        {
+            context.Result = new ForbidResult();
+        }
+    }
+}
+```
+
+#### 2. Middleware phân tích JWT Claims
+
+```csharp
+// Middleware/JwtClaimsMiddleware.cs
+public class JwtClaimsMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<JwtClaimsMiddleware> _logger;
+
+    public JwtClaimsMiddleware(
+        RequestDelegate next,
+        ILogger<JwtClaimsMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
+
+        if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer "))
+        {
+            var token = authHeader.Substring("Bearer ".Length).Trim();
+
+            try
+            {
+                // Parse JWT token (không verify, chỉ đọc claims)
+                var handler = new JsonWebTokenHandler();
+                var jsonToken = handler.ReadJsonWebToken(token);
+
+                // Tạo ClaimsIdentity từ token
+                var claims = new List<Claim>();
+
+                // Thêm basic claims
+                claims.Add(new Claim(ClaimTypes.NameIdentifier, jsonToken.Subject ?? ""));
+                claims.Add(new Claim(ClaimTypes.Name,
+                    jsonToken.Claims.FirstOrDefault(c => c.Type == "preferred_username")?.Value ?? ""));
+                claims.Add(new Claim(ClaimTypes.Email,
+                    jsonToken.Claims.FirstOrDefault(c => c.Type == "email")?.Value ?? ""));
+
+                // Thêm Realm Roles
+                var realmAccessClaim = jsonToken.Claims.FirstOrDefault(c => c.Type == "realm_access");
+                if (realmAccessClaim != null)
+                {
+                    var realmAccess = JsonSerializer.Deserialize<JsonElement>(realmAccessClaim.Value);
+                    if (realmAccess.TryGetProperty("roles", out var rolesElement))
+                    {
+                        foreach (var role in rolesElement.EnumerateArray())
+                        {
+                            claims.Add(new Claim(ClaimTypes.Role, role.GetString()));
+                        }
+                    }
+                }
+
+                // Thêm Resource Roles (Client roles)
+                var resourceAccessClaim = jsonToken.Claims.FirstOrDefault(c => c.Type == "resource_access");
+                if (resourceAccessClaim != null)
+                {
+                    claims.Add(new Claim("resource_access", resourceAccessClaim.Value));
+                }
+
+                var identity = new ClaimsIdentity(claims, "Keycloak");
+                context.User = new ClaimsPrincipal(identity);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing JWT claims");
+            }
+        }
+
+        await _next(context);
+    }
+}
+```
+
+#### 3. Sử dụng trong Controller
+
+```csharp
+// Controllers/AdminController.cs
+[ApiController]
+[Route("api/[controller]")]
+public class AdminController : ControllerBase
+{
+    private readonly ILogger<AdminController> _logger;
+
+    public AdminController(ILogger<AdminController> logger)
+    {
+        _logger = logger;
+    }
+
+    // Chỉ admin mới truy cập được
+    [HttpGet("dashboard")]
+    [RequireRole("admin")]
+    public IActionResult GetAdminDashboard()
+    {
+        var username = User.FindFirst(ClaimTypes.Name)?.Value;
+        var roles = User.FindAll(ClaimTypes.Role).Select(c => c.Value);
+
+        return Ok(new
+        {
+            message = "Welcome to admin dashboard",
+            user = username,
+            roles = roles
+        });
+    }
+
+    // Admin hoặc Moderator
+    [HttpGet("users")]
+    [RequireRole("admin", "moderator")]
+    public IActionResult GetUsers()
+    {
+        return Ok(new { message = "List of users" });
+    }
+
+    // Public endpoint - không cần role
+    [HttpGet("public")]
+    public IActionResult GetPublicInfo()
+    {
+        return Ok(new { message = "Public information" });
+    }
+}
+```
+
+#### 4. Cập nhật Program.cs để đăng ký middleware
+
+```csharp
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+// Đăng ký HttpClient cho KeycloakService
+builder.Services.AddHttpClient<IKeycloakService, KeycloakService>();
+
+// Đăng ký Controllers
+builder.Services.AddControllers();
+
+// Swagger
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+// QUAN TRỌNG: Thứ tự middleware
+app.UseHttpsRedirection();
+
+// 1. Xác thực JWT (validate token)
+app.UseMiddleware<JwtValidationMiddleware>();
+
+// 2. Parse claims từ JWT
+app.UseMiddleware<JwtClaimsMiddleware>();
+
+// 3. Authorization
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
+```
+
+#### 5. Cấu hình Roles trong Keycloak
+
+**Tạo Realm Roles:**
+1. Vào Keycloak Admin Console
+2. Chọn Realm của bạn
+3. Vào **Roles** → **Realm Roles**
+4. Click **Create Role**
+5. Tạo các roles: `admin`, `user`, `moderator`, etc.
+
+**Gán Roles cho User:**
+1. Vào **Users** → Chọn user
+2. Tab **Role Mappings**
+3. Trong **Realm Roles**, assign các roles cần thiết
+
+**Tạo Client Roles (Optional):**
+1. Vào **Clients** → Chọn client của bạn
+2. Tab **Roles**
+3. Create role cụ thể cho client này
+4. Assign cho users qua **Users** → **Role Mappings** → **Client Roles**
+
+#### 6. Kiểm tra Roles trong JWT Token
+
+Sau khi login, JWT token sẽ chứa roles trong payload:
+
+```json
+{
+  "sub": "user-id-123",
+  "preferred_username": "john.doe",
+  "email": "john@example.com",
+  "realm_access": {
+    "roles": ["admin", "user"]
+  },
+  "resource_access": {
+    "backend-service": {
+      "roles": ["api-user"]
+    }
+  }
+}
 ```
 
 ---
